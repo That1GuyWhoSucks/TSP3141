@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<head>
+    <link rel="icon" href="media/icon.png">
+</head>
+<body style="text-align: center;">
+    <p>Login to an existing account</p>
+    <p>username: <input id="login" maxlength="20"></p>
+    <h3>OR</h3>
+    <p>Create a new account</p>
+    <div>
+        <p style="display: inline;">username: <input id="createNew" maxlength="20" pattern="[A-Za-z0-9]+" minlength="1"> </p>
+        <p style="display: inline;" id="createNewLength"></p>
+    </div>
+    
+</body>
+<script>
+const base = `https://classdb.it.mtu.edu/~zrlatuse${window.location.pathname.includes("/public/") ? "/public" : ""}`;
+const params = window.location.search;
+const login = document.getElementById("login");
+login.onkeydown = function(ev) {
+    if (ev.key === "Enter") { // when enter is pressed in the login box
+        fetch(`${base}/api/login.php`, { // check if username is in DB
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({"username": login.value})
+        }).then(async (resp) => {
+            const results = await resp.json();
+            if (results.success) { // if it is in DB
+                localStorage.setItem("username", results.username); // set username in localStorage
+                window.location.href = `${base}/index.html${params}`; // redirect to main page
+            } else {
+                alert("Failed to login with username: " + results.username); // otherwise alert user
+            }
+        });
+    } 
+}
+const createNew = document.getElementById("createNew");
+const createNewLength = document.getElementById("createNewLength");
+createNewLength.innerText = `(${20 - createNew.value.length})`
+createNew.onkeydown = function(ev) {
+    if (ev.key === "Enter") { // when enter is pressed in the create new account box
+        if (createNew.validity.valid && createNew.value.length > 0) {
+            fetch(`${base}/api/createNewUser.php`, { // check if new username is already in DB
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({"username": createNew.value})
+            }).then(async (resp) => {
+                const results = await resp.json();
+                if (results.success) { // if it isn't in DB then do the same as login
+                    localStorage.setItem("username", results.username);
+                    window.location.href = `${base}/index.html${params}`;
+                } else {
+                    alert("The following username is already taken: " + results.username);
+                }
+            });
+        } else {
+            alert("Username is invalid");
+        }
+        
+    } else {
+        createNewLength.innerText = `(${20 - createNew.value.length})`
+    }
+}
+createNew.onkeyup = function(ev) {
+    createNewLength.innerText = `(${20 - createNew.value.length})`
+}
+
+</script>

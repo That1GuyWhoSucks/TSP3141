@@ -5,9 +5,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $data = json_decode(file_get_contents('php://input'), true);
     $pdo = accessDB();
     $stmt = $pdo->prepare(
-        'UPDATE users SET status=:newStatus WHERE authorId=:authorId;'
+        'DELETE FROM roomAccess WHERE authorId=:authorId AND roomId=:roomId'
     );
-    $stmt->execute(['newStatus' => $data['status'], 'authorId' => $data['authorId']]);
-    echo json_encode(['success' => true]);
+    $stmt->execute(['authorId' => $data['authorId'], 'roomId' => $data['roomId']]);
+    echo json_encode(['success' => true,]);
 }
 ?>

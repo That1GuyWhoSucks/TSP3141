@@ -19,52 +19,85 @@ body {
 </head>
 <body>
     <div id="roomBox" style="text-align: center;"></div>
+    <div style="text-align: right;">
+        <div>
+            <p style="display: inline;"> Logged In As:</p>
+            <p style="display:inline" id="usernameText"> </p>
+        </div>
+        <button id="logoutButton">Logout</button>
+    </div>
     <div class="wrapper cf">
         <div id="messageBox" style="height: 500px; width: 500px; border: 3px solid light-dark(#333b3c, #efefec); overflow-y: scroll; margin-right: 36.71%; float: right;"></div>
+        <div id="userBox" style="float: right; overflow-y: hidden; width: 200px; max-height: 500px;"></div>
     </div>
     <div style="margin: auto; text-align: center;">
-        <p style="display: inline;" ><input id="messageInput" maxlength="999" pattern="[ -~]+" minlength="1"></p>
+        <p style="display: inline;"><input id="messageInput" maxlength="999" pattern="[ -~]+" minlength="1"></p>
         <p id="messageInputLength" style="display: inline;">(999)</p>
+        <p style="display: block"> <input type="Submit" value="Send Message" id="send"> </p>
     </div>
     <br>
+    <div id="action-menu" style="position: absolute; top: 0px; right: 0px; z-index: 999;"></div>
 </body>
 <script>
+const usernameText = document.getElementById("usernameText");
 const input = document.getElementById("messageInput");
 const messageBox = document.getElementById("messageBox");
+const roomBox = document.getElementById("roomBox");
+const userBox = document.getElementById("userBox");
 const inputLength = document.getElementById("messageInputLength");
-
 // constant HTML elements that are commonly used
+
 const base = `https://classdb.it.mtu.edu/~zrlatuse${window.location.pathname.includes("/public/") ? "/public" : ""}`;
 const params = window.location.search;
+const sessionId = localStorage.getItem("sessionId");
 
 let allMessages = {}; // all currently stored messages. Format is {roomId: [msg, msg]...}
 let currentRoomId = null;
 let allRooms = [];
 let heartbeats = {}; // stores which roomIds have connections to server to listen for message updates. stored as {roomId: bool} where bool is true if a connection is active, false otherwise
-const username = localStorage.getItem("username");
 let userId = -1;
-let allUsers = {}; // all users
+let allUsers = {}; // all users formatted as {"STATUS": [USER OBJECTS]}
 
 const logout = function() {
     navigator.sendBeacon(`${base}/api/changeStatus.php`, JSON.stringify({"authorId": userId, "status": "OFFLINE"}));
 }
 
-if (username == null) { // if user gets to this page without a username redirect them to login
+if (sessionId == null) { // if user gets to this page without a sessionId redirect them to login
     window.location.href = `${base}/login.html${params}`;
 }
-
-fetch(`${base}/api/login.php`, { // verifies current username is valid and gets userId which is needed to send messages
+const refreshRooms = async function() {
+    const resp = await fetch(`${base}/api/getAllRoomsWithAccess.php`, { // get all rooms
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({"authorId": userId})
+    });
+    const res = await resp.json();
+    res.forEach((room) => {
+        
+        if (!allRooms.some((aRoom) => {
+            return aRoom.roomId == room.roomId
+            })
+        ) {
+            allRooms.push(room);
+            heartbeat[room.roomId] = false;
+            allMessages[room.roomId] = [];
+        }
+    });
+    buildRoomBox();
+}
+fetch(`${base}/api/checkSession.php`, { // verifies current sessionId is valid and gets userId which is needed to send messages
     method: "POST",
     headers: {
         "Content-Type": "application/json",
     },
-    body: JSON.stringify({"username": username})
+    body: JSON.stringify({"sessionId": sessionId})
 }).then(async (resp) => {
     const results = await resp.json();
     if (results.success) { // if login is good then build page
         userId = results.id;
-        
-        
+        usernameText.innerText = results.name;
         fetch(`${base}/api/changeStatus.php`, {
             method: "POST",
             headers: {
@@ -72,33 +105,122 @@ fetch(`${base}/api/login.php`, { // verifies current username is valid and gets 
             },
             body: JSON.stringify({"authorId": userId, "status": "ONLINE"})
         }).then((resp) => {
-            fetch(`${base}/api/getAllUsers.php`, {
-                method: "GET"
+        
+            fetch(`${base}/api/getAllRoomsWithAccess.php`, { // get all rooms
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({"authorId": userId})
             }).then(async (resp) => {
-                (await resp.json()).forEach((user) => {
-                    if (!allUsers.hasOwnProperty(user["status"])) {
-                        allUsers[user["status"]] = [];
-                    }
-                    allUsers[user["status"]].push(user)
-                })
-                fetch(`${base}/api/getAllRooms.php`, { // get all rooms
-                    method: "GET"
-                }).then(async (resp) => {
-                    allRooms = await resp.json();
-                    allRooms.forEach((room) => { // builds the global variables needed for this to function
-                        allMessages[room.roomId] = []
-                        heartbeats[room.roomId] = false;
-                    });
-                    buildRoomBox();
-                    switchRoom(1); // switches room to the default channel 1
+                allRooms = await resp.json();
+                allRooms.forEach((room) => { // builds the global variables needed for this to function
+                    allMessages[room.roomId] = [];
+                    heartbeats[room.roomId] = false;
                 });
+                buildRoomBox(); // builds the top row of buttons that switch active channel
+                switchRoom(allRooms[0].roomId); // switches room to the first result, if this is empty its not going to be happy
             });
+            
         });
-    } else { // otherwise remove the username and redirect to logout
-        localStorage.removeItem("username");
+    } else { // otherwise remove the sessionId and redirect to logout
+        localStorage.removeItem("sessionId");
         window.location.href = `${base}/login.html${params}`;
     }
 });
+
+const createUserActionMenu = function(ev, user) {
+    const div = document.getElementById("action-menu");
+    div.style = `position: absolute; top: ${ev.clientY}px; left: ${ev.clientX}px; z-index: 999; background: light-dark(#efefec,#333b3c); border: solid 2px light-dark(#333b3c,#efefec); padding: 10px;`;
+    const closeButton = document.createElement("button");
+    closeButton.innerText = "X";
+    closeButton.onclick = () => {
+        div.style = "visibility: hidden;"
+    }
+    const p = document.createElement("p");
+    p.innerText = `What to do with user: ${user['name']}`;
+    const sendDMButton = document.createElement("button");
+    sendDMButton.innerText = "Send DM"
+    sendDMButton.onclick = () => {
+        fetch(`${base}/api/getDmRoom.php`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                "authorId": userId, "targetAuthorId": user['authorId']
+            })
+        }).then(async (resp) => {
+            resp = await resp.json();
+            if (resp.success) {
+                switchRoom(resp.roomId);
+            } else {
+                const newRoomId = (await (
+                            await fetch(`${base}/api/createRoom.php`, {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json",
+                                },
+                                body: JSON.stringify({
+                                    "autoAdd": false, "name": "DM", "authorId": userId
+                                })
+                            })).json()).roomId
+                await fetch(`${base}/api/inviteToRoom.php`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        "roomId": newRoomId, 
+                        "authorId": user["authorId"]
+                    })
+                });
+                await new Promise(r => setTimeout(r, 1000));
+                await refreshRooms();
+                console.log(newRoomId);
+                switchRoom(newRoomId);
+            }
+        })
+    }
+    const banButton = document.createElement("button");
+    banButton.innerText = "Ban";
+    banButton.onclick = () => {
+        fetch(`${base}/api/banUser.php`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                "authorId": user['authorId'], "roomId": currentRoomId
+            })
+        });
+    }
+
+    div.replaceChildren(closeButton, p, banButton, sendDMButton);
+    
+}
+
+const createMessageElement = function(msg) { // takes in a message object from DB and turns it into a formatted HTML object which it returns
+    const div = document.createElement("div");
+    const timestamp = document.createElement("p");
+    timestamp.style = "font-size: x-small;position: relative;margin-bottom: 0px;margin-left: 5px;";
+    timestamp.innerText = msg.timestamp;
+    const usr = document.createElement("p");
+    usr.innerText = msg.name;
+    usr.style = "margin: 0 0 5px 5px;";
+    const message = document.createElement("p");
+    message.style = "margin-top: 0px;margin-left: 5px;word-wrap: break-word;padding: 0 20px 0 20px;";
+    message.innerText = msg.message;
+    div.replaceChildren(timestamp, usr, message);
+    return div;
+}
+
+const buildMessageBox = function() { // replaces messageBox's children with a new set of children of the currentRoomId and also sets scroll to be the bottom
+    messageBox.replaceChildren(...allMessages[currentRoomId].map((msg) => {
+        return createMessageElement(msg);
+    }));
+    messageBox.scrollTop = messageBox.scrollHeight;
+}
 
 const createRoomElement = function(room) { // takes in a room object from DB and turns it into a formatted HTML object which it returns
     const button = document.createElement("button");
@@ -111,28 +233,43 @@ const createRoomElement = function(room) { // takes in a room object from DB and
 }
 
 const buildRoomBox = function() { // replaces the roomBox's children with a new set of children from the allRooms object, NOTE that it does not remember if any button was disabled
+    console.log(allRooms);
     roomBox.replaceChildren(...allRooms.map((room) => {
         return createRoomElement(room);
     }));
 }
 
-const createMessageElement = function(msg) { // takes in a message object from DB and turns it into a formatted HTML object which it returns
-    const div = document.createElement("div");
-    const timestamp = document.createElement("p");
-    timestamp.style = "font-size: x-small;position: relative;margin-bottom: 0px;margin-left: 5px;";
-    timestamp.innerText = msg.timestamp;
-    const message = document.createElement("p");
-    message.style = "margin-top: 0px;margin-left: 5px;";
-    message.innerText = `${msg.name} said: ${msg.message}`;
-    div.replaceChildren(timestamp, message);
-    return div;
+const buildUsersBox = function() {
+    userBox.replaceChildren(...function () {
+        let retVal = [];
+        Object.keys(allUsers).sort().reverse().forEach((property) => {            
+            retVal.push(createUserElements(allUsers[property], property));
+        });
+        return retVal;
+    }());
 }
 
-const buildMessageBox = function() { // replaces messageBox's children with a new set of children of the currentRoomId and also sets scroll to be the bottom
-    messageBox.replaceChildren(...allMessages[currentRoomId].map((msg) => {
-        return createMessageElement(msg);
-    }));
-    messageBox.scrollTop = messageBox.scrollHeight;
+const createUserElements = function(users, status) {
+    let retval = [];
+    if (users.length === 0) {
+        return retval;
+    }
+    
+    const div = document.createElement("div");
+    let p = document.createElement("p");
+    p.innerText = `${status}: ${users.length}`;
+    p.style = "font-size: small; margin-bottom: -10px;";
+    div.appendChild(p);
+    users.forEach((user) => {
+        p = document.createElement("div");
+        p.style = "display: flex; height: 20px; padding-top: 15px; text-wrap: nowrap";
+        p.innerHTML = `<img src='media/icon.png' style='width: 20px; height: 20px; margin-right: 5px;'></img><p style='margin: 0;'>${user["name"]}</p>`;
+        p.onclick = (ev) => {
+            createUserActionMenu(ev, user);
+        }
+        div.appendChild(p);
+    });
+    return div;
 }
 
 const heartbeat = function(roomId) { // listens to a given roomId for new messages until the currentRoomId does not match its given roomId it will then terminate itself
@@ -142,7 +279,7 @@ const heartbeat = function(roomId) { // listens to a given roomId for new messag
             "Content-Type": "application/json",
         },
         body: JSON.stringify({
-            "lastTimestamp": allMessages[roomId].length === 0 ? "2024-10-09 12:00:00" : allMessages[roomId][allMessages[roomId].length - 1]["timestamp"],
+            "lastTimestamp": allMessages[roomId].length === 0 ? "2024-09-01 12:00:00" : allMessages[roomId][allMessages[roomId].length - 1]["timestamp"],
             "roomId": roomId,
         })
     }).then(async (resp) => {
@@ -170,13 +307,39 @@ const heartbeat = function(roomId) { // listens to a given roomId for new messag
 }
 
 const switchRoom = function(newRoomId) { // allows switching current active room
+    if (currentRoomId != null) { // set old room button to be active
+        document.getElementById(`roomButton-${currentRoomId}`).disabled = false;
+    }
+    console.log(newRoomId)
+    document.getElementById(`roomButton-${newRoomId}`).disabled = true; // set new room button to be not active
     currentRoomId = newRoomId; // swaps global var to be the newRoomId
     if (!heartbeats[currentRoomId]) { // if there is not already a listener for that room, then update `heartbeats` to say that there is and then create one
         heartbeats[currentRoomId] = true;
         heartbeat(currentRoomId);
     }
-    document.getElementById(`roomButton-${newRoomId}`).disabled = true; // set new room button to be not active
+    fetch(`${base}/api/getAllUsersInRoom.php`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            "roomId": currentRoomId,
+        })
+    }).then(async (resp) => {
+        allUsers = {};
+        (await resp.json()).forEach((user) => {
+            if (!allUsers.hasOwnProperty(user["status"])) {
+                allUsers[user["status"]] = [];
+            }
+            allUsers[user["status"]].push(user)
+        });
+        for (const prop in allUsers) {
+            allUsers[prop].sort((a, b) => a.name > b.name);
+        }
+        buildUsersBox();
+    });
     buildMessageBox(); // build a new message box and clear previous one
+    
 }
 
 input.onkeydown = async function(ev) {
@@ -201,6 +364,30 @@ input.onkeyup = function(ev) {
     inputLength.innerText = `(${999 - input.value.length})`;
 }
 
+//function call to send message on button click
+const sendFunc = async function () {
+    if (input.validity.valid) {
+        const res = await fetch(`${base}/api/newMessage.php`, { // TODO: add error handling here
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ "message": input.value, "roomId": currentRoomId, "authorId": userId }) // sends data to server to add new row to message table
+        });
+        input.value = "";
+    } else {
+        alert("Message is invalid");
+    }
+inputLength.innerText = `(${999 - input.value.length})`;
+}
+//call to when button clicked
+document.getElementById("send").onclick = sendFunc;
+
+document.getElementById("logoutButton").onclick = () => { // logs out on click by deleting sessionId from localStorage
+    logout();
+    localStorage.removeItem("sessionId");
+    window.location.href = `${base}/login.html${params}`;
+}
 
 window.addEventListener("beforeunload", logout);
 

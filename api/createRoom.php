@@ -8,6 +8,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare(
             'INSERT INTO rooms (name, autoAdd) VALUES (:name, 1);
             INSERT INTO roomAccess (SELECT authorId,LAST_INSERT_ID(),0 FROM users);
+            INSERT INTO adminActions (roomId, id, actionType, actionTarget) SELECT LAST_INSERT_ID(), authorId, "ADD", "USER" FROM users;
             UPDATE roomAccess SET role=1 WHERE authorId=:authorId AND roomId=LAST_INSERT_ID();'
         );
     } else {

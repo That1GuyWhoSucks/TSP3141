@@ -57,6 +57,7 @@ let allRooms = [];
 let heartbeats = {}; // stores which roomIds have connections to server to listen for message updates. stored as {roomId: bool} where bool is true if a connection is active, false otherwise
 let userId = -1;
 let allUsers = {}; // all users formatted as {"STATUS": [USER OBJECTS]}
+let isAdmin = null;
 
 const logout = function() {
     navigator.sendBeacon(`${base}/api/changeStatus.php`, JSON.stringify({"authorId": userId, "status": "OFFLINE"}));
@@ -156,15 +157,15 @@ const createUserActionMenu = function(ev, user) {
                 switchRoom(resp.roomId);
             } else {
                 const newRoomId = (await (
-                            await fetch(`${base}/api/createRoom.php`, {
-                                method: "POST",
-                                headers: {
-                                    "Content-Type": "application/json",
-                                },
-                                body: JSON.stringify({
-                                    "autoAdd": false, "name": "DM", "authorId": userId
-                                })
-                            })).json()).roomId
+                    await fetch(`${base}/api/createRoom.php`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            "autoAdd": false, "name": "DM", "authorId": userId
+                        })
+                    })).json()).roomId
                 await fetch(`${base}/api/inviteToRoom.php`, {
                     method: "POST",
                     headers: {
@@ -177,9 +178,9 @@ const createUserActionMenu = function(ev, user) {
                 });
                 await new Promise(r => setTimeout(r, 1000));
                 await refreshRooms();
-                console.log(newRoomId);
                 switchRoom(newRoomId);
             }
+            div.style = "display: hidden;";
         })
     }
     const banButton = document.createElement("button");
@@ -194,14 +195,46 @@ const createUserActionMenu = function(ev, user) {
                 "authorId": user['authorId'], "roomId": currentRoomId
             })
         });
+        div.style = "display: hidden;";
     }
 
     div.replaceChildren(closeButton, p, banButton, sendDMButton);
+}
+
+const createMessageActionMenu = function (ev, msg) {
+    const div = document.getElementById("action-menu");
+    div.style = `position: absolute; top: ${ev.clientY}px; left: ${ev.clientX}px; z-index: 999; background: light-dark(#efefec,#333b3c); border: solid 2px light-dark(#333b3c,#efefec); padding: 10px;`;
+    const closeButton = document.createElement("button");
+    closeButton.innerText = "X";
+    closeButton.onclick = () => {
+        div.style = "visibility: hidden;"
+    }
+    const p = document.createElement("p");
+    p.innerText = `What to do with message`;
+
+    const deleteMessageButton = document.createElement("button");
+    deleteMessageButton.onclick = () => {
+        fetch(`${base}/api/deleteMessage.php`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                "messageId": msg['id'], "roomId": currentRoomId
+            })
+        });
+        div.style = "visibility: hidden;";
+    }
     
+    
+    div.replaceChildren(closeButton, p, deleteMessageButton);
 }
 
 const createMessageElement = function(msg) { // takes in a message object from DB and turns it into a formatted HTML object which it returns
     const div = document.createElement("div");
+    if (isAdmin) {
+        div.onclick = (ev) => createMessageActionMenu(ev, msg)
+    }
     const timestamp = document.createElement("p");
     timestamp.style = "font-size: x-small;position: relative;margin-bottom: 0px;margin-left: 5px;";
     timestamp.innerText = msg.timestamp;
@@ -233,7 +266,6 @@ const createRoomElement = function(room) { // takes in a room object from DB and
 }
 
 const buildRoomBox = function() { // replaces the roomBox's children with a new set of children from the allRooms object, NOTE that it does not remember if any button was disabled
-    console.log(allRooms);
     roomBox.replaceChildren(...allRooms.map((room) => {
         return createRoomElement(room);
     }));
@@ -264,8 +296,10 @@ const createUserElements = function(users, status) {
         p = document.createElement("div");
         p.style = "display: flex; height: 20px; padding-top: 15px; text-wrap: nowrap";
         p.innerHTML = `<img src='media/icon.png' style='width: 20px; height: 20px; margin-right: 5px;'></img><p style='margin: 0;'>${user["name"]}</p>`;
-        p.onclick = (ev) => {
-            createUserActionMenu(ev, user);
+        if (isAdmin) {
+            p.onclick = (ev) => {
+                createUserActionMenu(ev, user);
+            }
         }
         div.appendChild(p);
     });
@@ -291,32 +325,44 @@ const heartbeat = function(roomId) { // listens to a given roomId for new messag
                 heartbeats[roomId] = false;
             }
         } else {
-            const newMessages = await resp.json();
-            allMessages[roomId].push(...newMessages); // adds new messages to the roomId it was assigned
+            const respjson = await resp.json();
+            const newMessages = respjson.messages;
+            const updates = respjson.updates;
+            
             if (roomId === currentRoomId) { // if the roomId it was assigned is the currentRoomId then update the messageBox and start the cycle again
+                let updateUsers = false
+                let updateMessageBox = false;
+                updates.forEach((update) => {
+                    if (!updateUsers && update.actionTarget == "USER") {
+                        updateRoomUsers();
+                        updateUsers = true;
+                    } else if (update.actionTarget == "MESG" && update.actionType == "REM") {
+                        allMessages[roomId].splice(allMessages[roomId].findIndex((mesg) => mesg.messageId == update.id), 1);
+                        updateMessageBox = true;
+                        
+                    }
+                });
+                if (updateMessageBox) {
+                    buildMessageBox();
+                }
+                allMessages[roomId].push(...newMessages); // adds new messages to the roomId it was assigned
+                while (allMessages[roomId].length > 50) {
+                    allMessages[roomId].shift();
+                }
                 newMessages.forEach(msg => {
                     messageBox.appendChild(createMessageElement(msg));
                 });
                 messageBox.scrollTop = messageBox.scrollHeight;
                 heartbeat(roomId);
             } else { // otherwise terminate self
+                allMessages[roomId] = []; // clear messages it remembered
                 heartbeats[roomId] = false;
             }
         }
     });
 }
 
-const switchRoom = function(newRoomId) { // allows switching current active room
-    if (currentRoomId != null) { // set old room button to be active
-        document.getElementById(`roomButton-${currentRoomId}`).disabled = false;
-    }
-    console.log(newRoomId)
-    document.getElementById(`roomButton-${newRoomId}`).disabled = true; // set new room button to be not active
-    currentRoomId = newRoomId; // swaps global var to be the newRoomId
-    if (!heartbeats[currentRoomId]) { // if there is not already a listener for that room, then update `heartbeats` to say that there is and then create one
-        heartbeats[currentRoomId] = true;
-        heartbeat(currentRoomId);
-    }
+const updateRoomUsers = function() {
     fetch(`${base}/api/getAllUsersInRoom.php`, {
         method: "POST",
         headers: {
@@ -338,13 +384,28 @@ const switchRoom = function(newRoomId) { // allows switching current active room
         }
         buildUsersBox();
     });
+}
+
+const switchRoom = function(newRoomId) { // allows switching current active room
+    document.getElementById("action-menu").style = 'display: hidden;';
+    if (currentRoomId != null) { // set old room button to be active
+        document.getElementById(`roomButton-${currentRoomId}`).disabled = false;
+    }
+    isAdmin = allRooms[allRooms.findIndex(val => val.roomId == newRoomId)].role > 0;
+    document.getElementById(`roomButton-${newRoomId}`).disabled = true; // set new room button to be not active
+    currentRoomId = newRoomId; // swaps global var to be the newRoomId
+    if (!heartbeats[currentRoomId]) { // if there is not already a listener for that room, then update `heartbeats` to say that there is and then create one
+        heartbeats[currentRoomId] = true;
+        heartbeat(currentRoomId);
+    }
+    updateRoomUsers();
     buildMessageBox(); // build a new message box and clear previous one
     
 }
 
 input.onkeydown = async function(ev) {
     if (ev.key === "Enter" && userId > 0) {
-        if (input.validity.valid) {
+        if (input.validity.valid && input.value.length > 0) {
             const res = await fetch(`${base}/api/newMessage.php`, { // TODO: add error handling here
                 method: "POST",
                 headers: {
